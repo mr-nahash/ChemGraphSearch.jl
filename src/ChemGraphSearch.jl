@@ -715,14 +715,31 @@ end
 # -----------------------------
 # Persistence
 # -----------------------------
-function save_index(index::Index, path::String)
-    open(path, "w") do io
-        serialize(io, index)
-    end
+
+# Pick a safe default directory for data files
+function default_data_dir()::String
+    dir = joinpath(homedir(), ".chemgraphsearch")
+    isdir(dir) || mkpath(dir)
+    return dir
 end
 
-function load_index(path::String)::Index
-    open(path) do io
+# If user passes a relative path like "test.idx", write it under default_data_dir()
+function normalize_path(path::AbstractString)::String
+    p = String(path)
+    return isabspath(p) ? p : joinpath(default_data_dir(), p)
+end
+
+function save_index(index::Index, path::AbstractString)
+    p = normalize_path(path)
+    open(p, "w") do io
+        serialize(io, index)
+    end
+    return p
+end
+
+function load_index(path::AbstractString)::Index
+    p = normalize_path(path)
+    open(p) do io
         return deserialize(io)
     end
 end
