@@ -460,11 +460,172 @@ function fp_subset(qfp::Vector{UInt64}, tfp::Vector{UInt64})::Bool
 end
 
 # -----------------------------
+# Kekulé -> Aromatic normalization (chemical equivalence)
+# -----------------------------
+
+# get bond type between two atoms in adjacency list (pre-CSR)
+function _adj_bond_type(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int)::UInt8
+    for (nbr, bt) in adj[a]
+        if nbr == b
+            return bt
+        end
+    end
+    return 0x00
+end
+
+# set bond type in both directions in adjacency list (pre-CSR)
+function _adj_set_bond!(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int, bt::UInt8)
+    for k in eachindex(adj[a])
+        if adj[a][k][1] == b
+            adj[a][k] = (b, bt)
+            break
+        end
+    end
+    for k in eachindex(adj[b])
+        if adj[b][k][1] == a
+            adj[b][k] = (a, bt)
+            break
+        end
+    end
+    return nothing
+end
+
+# canonicalize a 6-cycle to avoid duplicates (rotation + reversal)
+function _canon6(cyc::NTuple{6,Int})::NTuple{6,Int}
+    v = collect(cyc)
+    best = nothing
+
+    function rotmin(w)
+        # rotate so smallest element is first; if multiple, take lexicographically smallest
+        mins = findall(==(minimum(w)), w)
+        candidates = NTuple{6,Int}[]
+        for idx in mins
+            r = [w[idx:end]; w[1:idx-1]]
+            push!(candidates, (r[1],r[2],r[3],r[4],r[5],r[6]))
+        end
+        return minimum(candidates)
+    end
+
+    a = rotmin(v)
+    b = rotmin(reverse(v))
+    return min(a, b)
+end
+
+# find 6-cycles by bounded DFS (simple, fast enough for small/medium molecules)
+function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int)
+    cycles = Set{NTuple{6,Int}}()
+
+    function dfs(start::Int, curr::Int, path::Vector{Int})
+        # path includes curr
+        if length(path) == 6
+            # close cycle?
+            if any(t -> t[1] == start, adj[curr])
+                cyc = (path[1], path[2], path[3], path[4], path[5], path[6])
+                push!(cycles, _canon6(cyc))
+            end
+            return
+        end
+
+        for (nbr, _) in adj[curr]
+            if nbr == start
+                continue
+            end
+            if nbr in path
+                continue
+            end
+            # prune: keep paths roughly increasing from start to reduce duplicates a bit
+            dfs(start, nbr, [path; nbr])
+        end
+    end
+
+    for s in 1:n
+        dfs(s, s, [s])
+    end
+
+    return collect(cycles)
+end
+
+# Return true if the ring bonds alternate single/double around the cycle
+function _is_alternating_1_2(bonds::Vector{UInt8})::Bool
+    @assert length(bonds) == 6
+    ok12 = true
+    ok21 = true
+    for i in 1:6
+        expected12 = isodd(i) ? BOND_SINGLE : BOND_DOUBLE
+        expected21 = isodd(i) ? BOND_DOUBLE : BOND_SINGLE
+        ok12 &= (bonds[i] == expected12)
+        ok21 &= (bonds[i] == expected21)
+    end
+    return ok12 || ok21
+end
+
+"""
+    normalize_kekule_aromatic!(atoms, adj)
+
+Heuristic chemical equivalence:
+- Detect 6-member rings with alternating single/double bonds
+- Convert ring bonds to aromatic and mark ring atoms aromatic
+
+This makes `C1=CC=CC=C1` behave like `c1ccccc1` for matching/search.
+"""
+function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int,UInt8}}})
+    n = length(atoms)
+    n < 6 && return nothing
+
+    cycles = _find_6cycles(adj, n)
+
+    for cyc in cycles
+        nodes = collect(cyc)
+
+        # Skip if already aromatic ring (nothing to do)
+        if any(i -> atoms[i].aromatic, nodes)
+            continue
+        end
+
+        # Restrict to common aromatic elements (C, N) to stay safe
+        if any(i -> !(atoms[i].z in (UInt8(6), UInt8(7))), nodes)
+            continue
+        end
+
+        # Collect bond types around the ring
+        bonds = UInt8[]
+        ok = true
+        for i in 1:6
+            a = nodes[i]
+            b = nodes[i == 6 ? 1 : i+1]
+            bt = _adj_bond_type(adj, a, b)
+            if bt != BOND_SINGLE && bt != BOND_DOUBLE
+                ok = false
+                break
+            end
+            push!(bonds, bt)
+        end
+        ok || continue
+
+        # Must be alternating single/double
+        _is_alternating_1_2(bonds) || continue
+
+        # --- apply aromatic normalization ---
+        for i in nodes
+            atoms[i] = Atom(atoms[i].z, atoms[i].charge, true, atoms[i].h_count)
+        end
+        for i in 1:6
+            a = nodes[i]
+            b = nodes[i == 6 ? 1 : i+1]
+            _adj_set_bond!(adj, a, b, BOND_AROMATIC)
+        end
+    end
+
+    return nothing
+end
+
+# -----------------------------
 # Compile molecule
 # -----------------------------
 function compile_mol(id::String, smiles::String)::Molecule
     atoms, adj = parse_smiles(smiles)
     perceive!(atoms, adj)
+    normalize_kekule_aromatic!(atoms, adj)
     n = length(atoms)
 
     # Build CSR-like half-edge storage: store each undirected edge once under min(a,b)

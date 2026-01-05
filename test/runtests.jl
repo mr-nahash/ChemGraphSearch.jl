@@ -19,3 +19,10 @@ end
     res = search(idx, "c1ccccc1")
     @test length(res) >= 1
 end
+
+@testset "Aromatic/kekule equivalence" begin
+    idxA = build_index(["c1ccccc1", "C1=CC=CC=C1"], ["arom", "kekule"])
+    res = search(idxA, "c1ccccc1")
+    ids = sort(first.(res))
+    @test ids == ["arom", "kekule"]
+end
