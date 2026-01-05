@@ -491,14 +491,13 @@ function compile_mol(id::String, smiles::String)::Molecule
     adj_list = [ [d for (d, _) in adj[i]] for i in 1:n ]
     ringatom, edge_ring2 = detect_rings(n, adj_list, edge_indices)
     edge_ring = edge_ring2
-
+    
     # Degree / valence
     degree = UInt8[length(adj[i]) for i in 1:n]
     valence = UInt8[
-        sum((b == BOND_AROMATIC) ? 1 : Int(b) for (_, b) in adj[i])
+        sum(((b == BOND_AROMATIC) ? 1 : Int(b)) for (_, b) in adj[i]; init=0)
         for i in 1:n
     ]
-
     # Neighborhood hash
     neigh_hash = zeros(UInt32, n)
     for i in 1:n
