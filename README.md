@@ -86,7 +86,7 @@ search(index, smiles;
 )
 ```
 
-## Detailed Documentation
+## Documentation
 
 ### 1. Molecule Representation (`Molecule` struct)
 
@@ -148,7 +148,6 @@ end
 | 100,000       | 15–90 min        | 2–8 GB               | 5–100 ms             | 0.5–5 s                  |
 | 500,000       | 2–10 hours       | 10–40 GB             | 10–500 ms            | 5–60 s                   |
 
-Here is an improved version of the **"Current Major Limitations & Known Pain Points"** section — now balanced with a symmetric **Strengths** subsection so readers get a fair, honest and complete picture.
 
 ### 5. Strengths & Current Major Limitations (January 2026)
 
