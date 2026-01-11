@@ -12,7 +12,7 @@ Not (yet) suitable for: production systems with millions of compounds
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/yourusername/ChemGraphSearch.jl.git")
+Pkg.add(url="https://github.com/mr-nahash/ChemGraphSearch.jl.git")
 
 using ChemGraphSearch
 
