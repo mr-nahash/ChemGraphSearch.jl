@@ -3,7 +3,7 @@ module ChemGraphSearch
 export Atom, Molecule, Index, MatchMode, SearchHit,
        compile_mol, build_index, search,
        save_index, load_index, read_smi_file,
-       hit_ids, show_hits
+       hit_ids, show_hits, EXACT, GENERALIZED
 
 using Serialization
 
