@@ -346,30 +346,36 @@ function perceive!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}}; 
     if verbose
         println("Perceiving implicit hydrogens based on valence")
     end
+
     n = length(atoms)
     for i in 1:n
-        # only assign implicit H if not explicitly specified in bracket
+        # Only assign implicit H if not explicitly specified in bracket
         if atoms[i].h_count == 0
-            expected_valence::Int
+            expected_valence = 0
+
             if atoms[i].aromatic && atoms[i].z == UInt8(6)
-                # Aromatic carbon: valence 3 (two ring bonds + one substituent/H)
+                # Aromatic carbon: treat as valence 3
                 expected_valence = 3
             elseif atoms[i].aromatic && atoms[i].z == UInt8(7)
-                # Pyridine-like aromatic N: valence 3, no H unless explicitly [nH]
+                # Aromatic nitrogen:
+                # - "n" (pyridine-like) has no H unless explicitly [nH]
+                # - we still use valence 3 for counting purposes
                 expected_valence = 3
             else
                 valences = get(VALENCE_TABLE, atoms[i].z, [0])
                 expected_valence = minimum(valences)
             end
 
-            curr_val = sum((btype == BOND_AROMATIC) ? 1 : Int(btype) for (_, btype) in adj[i]; init=0)
+            curr_val = sum(((btype == BOND_AROMATIC) ? 1 : Int(btype)) for (_, btype) in adj[i]; init=0)
             min_h = max(0, expected_valence - curr_val)
 
             atoms[i] = Atom(atoms[i].z, atoms[i].charge, atoms[i].aromatic, UInt8(min_h))
         end
     end
+
     return nothing
 end
+
 
 # -----------------------------
 # Ring detection (simple DFS marking)
