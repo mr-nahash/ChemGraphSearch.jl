@@ -80,47 +80,93 @@ This demo shows:
 ```julia
 using ChemGraphSearch
 
+# ============================================================
+# ChemGraphSearch.jl — Newcomer Guided Demo (copy/paste)
+#
+# What you’ll learn:
+#   1) Build a tiny index from SMILES
+#   2) Search a substructure (benzene ring)
+#   3) EXACT vs GENERALIZED matching
+#   4) Optional atom mappings (query atom → target atom)
+#   5) Save & reload an index
+# ============================================================
+
+println("\n== 1) Build a tiny demo index ==")
+
 smiles = [
-    "c1ccccc1", "c1ccncc1", "O=c1ccccc1", "C1=CC=CC=C1",
-    "C1CCCCC1", "CCO", "c1ccc(cc1)O", "c1ccc2ccccc2c1"
+    "c1ccccc1",            # benzene
+    "c1ccncc1",            # pyridine (one N in aromatic ring)
+    "O=c1ccccc1",          # benzaldehyde
+    "C1=CC=CC=C1",         # benzene (Kekulé form)
+    "C1CCCCC1",            # cyclohexane (non-aromatic)
+    "CCO",                 # ethanol
+    "c1ccc(cc1)O",         # phenol
+    "c1ccc2ccccc2c1"       # naphthalene
 ]
-ids = ["benzene","pyridine","benzaldehyde","benzene_kekule","cyclohexane","ethanol","phenol","naphthalene"]
 
-println("Building index (once)...")
+ids = [
+    "benzene",
+    "pyridine",
+    "benzaldehyde",
+    "benzene_kekule",
+    "cyclohexane",
+    "ethanol",
+    "phenol",
+    "naphthalene"
+]
+
+# TIP: verbose=true prints internal steps; keep false for a clean demo.
 idx = build_index(smiles, ids; verbose=false)
-println("✓ indexed ", length(idx.mols), " molecules\n")
+println("✓ Built index with ", length(idx.mols), " molecules")
 
-query = "c1ccccc1"
-println("Query = ", query, "\n")
+println("\n== 2) Define a query substructure ==")
+query = "c1ccccc1"  # benzene ring in aromatic form
+println("Query SMILES: ", query)
 
-function show_hits(title, hits; mappings=false)
-    println(title)
-    isempty(hits) && return println("  (no matches)\n")
+# ------------------------------------------------------------
+# Helper: print results in a beginner-friendly way
+# (works with SearchHit objects; mappings optional)
+# ------------------------------------------------------------
+function show_hits(title, hits; show_mapping=false)
+    println("\n" * title)
+    if isempty(hits)
+        println("  (no matches)")
+        return
+    end
     for h in hits
-        if mappings && hasproperty(h, :mapping) && h.mapping !== nothing
+        # SearchHit usually has fields: id, mapping (mapping may be nothing)
+        if show_mapping && hasproperty(h, :mapping) && h.mapping !== nothing
             println("  • ", h.id, " | mapping = ", h.mapping)
         else
             println("  • ", h.id)
         end
     end
-    println()
 end
 
+println("\n== 3) EXACT mode (strict chemistry) ==")
+println("In EXACT mode, aromatic carbon must match aromatic carbon (C ≠ N).")
 hits_exact = search(idx, query; mode=ChemGraphSearch.EXACT, verbose=false)
-show_hits("EXACT (strict element matching):", hits_exact)
+show_hits("Matches (EXACT):", hits_exact)
 
+println("\n== 4) GENERALIZED mode (scaffold-like) ==")
+println("In GENERALIZED mode, aromatic C in the *query* may match aromatic C or aromatic N.")
+println("That means a benzene query can also match pyridine.")
 hits_gen = search(idx, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
-show_hits("GENERALIZED (aromatic C can match aromatic N):", hits_gen)
+show_hits("Matches (GENERALIZED):", hits_gen)
 
+println("\n== 5) OPTIONAL: return atom mappings ==")
+println("Atom mapping shows which target atoms correspond to each query atom index.")
 hits_map = search(idx, query; mode=ChemGraphSearch.GENERALIZED, return_mappings=true, verbose=false)
-show_hits("GENERALIZED + atom mappings:", hits_map; mappings=true)
+show_hits("Matches (GENERALIZED + mappings):", hits_map; show_mapping=true)
 
+println("\n== 6) Save & reload the index ==")
 save_index(idx, "demo_index.idx")
 idx2 = load_index("demo_index.idx")
-hits_reload = search(idx2, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
-show_hits("After reload (GENERALIZED):", hits_reload)
 
-println("Done.")
+hits_reload = search(idx2, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+show_hits("Matches after reload (GENERALIZED):", hits_reload)
+
+println("\nDone ✅")
 ```
 ## Core Usage (Cheat Sheet)
 
