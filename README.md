@@ -1,93 +1,198 @@
-# julia cheminformatics
+# ChemGraphSearch.jl
 
+**Pure Julia • Lightweight chemical substructure search engine**  
+(for small-to-medium sized chemical libraries – up to ~100–300k compounds)
 
+Path-based fingerprints (2048 bits) + VF2-style subgraph isomorphism matching  
+Automatic Kekulé ↔ aromatic normalization  
+No external dependencies · MIT licensed
 
-## Getting started
-
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
-
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
-
-## Add your files
-
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://git.unistra.fr/Grinch.Inc/julia-cheminformatics.git
-git branch -M main
-git push -uf origin main
-```
-
-## Integrate with your tools
-
-- [ ] [Set up project integrations](https://git.unistra.fr/Grinch.Inc/julia-cheminformatics/-/settings/integrations)
-
-## Collaborate with your team
-
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+**Current status (January 2026):**  
+Experimental / research / prototyping grade tool  
+Great for teaching, small proprietary collections, Julia-native workflows
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```julia
+using Pkg
+ Pkg.add(url="https://github.com/mr-nahash/ChemGraphSearch.jl.git")
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+using ChemGraphSearch
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+### Quick smoke test after installation
+
+```julia
+using ChemGraphSearch
+println("Fingerprint size: ", ChemGraphSearch.FP_BITS)   # should print 2048
+```
+
+## Quick Demo – Copy & Paste in < 60 seconds
+```julia
+using ChemGraphSearch
+
+# ------------------------------------------------------------
+# 1) Tiny built-in demo dataset
+# ------------------------------------------------------------
+smiles = [
+    "c1ccccc1",            # benzene (aromatic C6)
+    "c1ccncc1",            # pyridine (aromatic C5N)
+    "O=c1ccccc1",          # benzaldehyde (Kekulé/aromatic normalization helps)
+    "C1=CC=CC=C1",         # benzene in Kekulé form (should normalize to aromatic)
+    "C1CCCCC1",            # cyclohexane (non-aromatic ring)
+    "CCO",                 # ethanol
+    "c1ccc(cc1)O",         # phenol
+    "c1ccc2ccccc2c1"       # naphthalene
+]
+ids = [
+    "benzene",
+    "pyridine",
+    "benzaldehyde",
+    "benzene_kekule",
+    "cyclohexane",
+    "ethanol",
+    "phenol",
+    "naphthalene"
+]
+
+println("Building small demo index...")
+idx = build_index(smiles, ids)
+println("Index size: ", length(idx.mols), " molecules")
+
+# Helper to print results nicely
+function show_results(title, results)
+    println("\n" * title)
+    if isempty(results)
+        println("  (no matches)")
+        return
+    end
+    for (name, mapping) in results
+        if mapping === nothing
+            println("  • ", name)
+        else
+            # mapping is query_atom_index -> target_atom_index
+            println("  • ", name, "  | mapping: ", mapping)
+        end
+    end
+end
+
+# ------------------------------------------------------------
+# 2) EXACT mode (default): element-typed substructure
+#    - benzene query will NOT match pyridine
+# ------------------------------------------------------------
+q = "c1ccccc1"
+res_exact = search(idx, q; mode=EXACT, verbose=false)
+show_results("EXACT search for $q (benzene motif; C must stay C):", res_exact)
+
+# Expected matches: benzene, benzaldehyde, benzene_kekule, phenol, naphthalene
+# NOT expected: pyridine (because one ring atom is N)
+
+# ------------------------------------------------------------
+# 3) GENERALIZED mode: pharma-friendly aromatic C -> {aromatic C, aromatic N}
+#    - benzene query CAN match pyridine (scaffold-like)
+# ------------------------------------------------------------
+res_gen = search(idx, q; mode=GENERALIZED, verbose=false)
+show_results("GENERALIZED search for $q (aromatic ring scaffold; C can match aromatic N):", res_gen)
+
+# Expected matches include everything from EXACT plus: pyridine
+
+# ------------------------------------------------------------
+# 4) OPTIONAL: show atom mapping (useful for debugging / highlighting)
+# ------------------------------------------------------------
+res_map = search(idx, q; mode=GENERALIZED, return_mappings=true, verbose=false)
+show_results("GENERALIZED + return_mappings=true (see how query atoms map onto target atoms):", res_map)
+
+# ------------------------------------------------------------
+# 5) Save / load index (fast reload)
+# ------------------------------------------------------------
+println("\nSaving index to disk...")
+save_path = save_index(idx, "demo_index.idx"; verbose=true)
+
+println("Reloading index...")
+idx2 = load_index("demo_index.idx"; verbose=false)
+println("Reloaded index size: ", length(idx2.mols))
+
+# Sanity check after reload
+res2 = search(idx2, q; mode=GENERALIZED, verbose=false)
+show_results("GENERALIZED search after reload:", res2)
+
+println("\nDone.")
+```
+
+## Ready-to-Run Examples
+
+All examples are in the `examples/` folder — run them like this:
+
+```bash
+cd examples
+julia --project=../.. 01_basic_search.jl
+```
+
+| File                        | What it shows                                      | Best for                          |
+|-----------------------------|----------------------------------------------------|-----------------------------------|
+| `01_basic_search.jl`        | Multiple simple queries on small dataset           | First steps                       |
+| `02_mappings.jl`            | Atom-by-atom mapping between query & target        | Visualization / SAR analysis      |
+| `03_realistic_workflow.jl`  | Read .smi → build → save → load → search           | Real-world typical usage          |
+| `04_kekule_aromatic.jl`     | Kekulé form matches aromatic query automatically   | Understanding normalization       |
+| `05_read_smi_file.jl`       | Loading real ChEMBL-style .smi files               | Working with your own data        |
+
+Every example is self-contained and uses the correct project environment.
+
+## Core Usage in One Table
+
+```julia
+# Build once (slowest step)
+idx = build_index(smiles_vector, ids_vector; verbose=true)
+
+# Persistence (highly recommended!)
+save_index(idx, "my_collection.idx")
+idx = load_index("my_collection.idx")          # fast!
+
+# Search
+search(idx, "c1ccccc1")                        # → list of matching ids
+search(idx, "c1ccncc1C(=O)O", return_mappings=true)  # → ids + atom mappings
+```
+
+## Run the Tests
+
+```bash
+# From project root
+julia --project=test -e 'using Pkg; Pkg.test("ChemGraphSearch")'
+
+# or directly:
+julia --project=test test/runtests.jl
+```
+
+## Realistic Expectations – January 2026
+
+### What currently works very well
+
+- Completely pure Julia → easy install, modify, deploy
+- Fast queries after indexing (usually 1–200 ms)
+- Atom mapping included by default
+- Kekulé/aromatic equivalence handling
+- No cloud/external services needed
+- Great for teaching, prototyping, small–medium local collections
+
+### Current main limitations
+
+- Index creation is slow (~0.5–5 seconds per molecule)
+- Memory usage grows quickly (>5–10 GB for 200k+ molecules)
+- Only basic organic elements supported (B,C,N,O,F,P,S,halogens)
+- No stereochemistry handling
+- No SMARTS (only plain SMILES queries)
+- No similarity/Tanimoto search (yet)
 
 ## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+We especially welcome:
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+- Bug reports with tricky/problematic SMILES
+- Performance improvement ideas
+- Additional test cases (macrocycles, unusual charges, tautomers…)
+- Better documentation & more examples
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+MIT License — free for academic, personal and commercial use.
 
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+**Feedback & weird molecules are very welcome!**  
+Open an issue — we love collecting challenging SMILES cases 🧪
