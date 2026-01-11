@@ -81,8 +81,6 @@ This demo shows:
 using ChemGraphSearch
 
 # ============================================================
-# ChemGraphSearch.jl — Newcomer Guided Demo (copy/paste)
-#
 # What you’ll learn:
 #   1) Build a tiny index from SMILES
 #   2) Search a substructure (benzene ring)
@@ -168,21 +166,48 @@ show_hits("Matches after reload (GENERALIZED):", hits_reload)
 
 println("\nDone ✅")
 ```
+
 ## Core Usage (Cheat Sheet)
 
 ```julia
-# Build index (slowest step)
-idx = build_index(smiles, ids)
+## Core Usage (Cheat Sheet)
 
-# Save for later
-save_index(idx, "my_collection.idx")
+using ChemGraphSearch
 
-# Reload instantly
-idx = load_index("my_collection.idx")
+# ------------------------------------------------------------
+# 1) Build an index (slowest step — do this once)
+# ------------------------------------------------------------
+idx = build_index(smiles, ids; verbose=false)     # smiles::Vector{String}, ids::Vector{String}
 
-# Search
-search(idx, "c1ccccc1")
-search(idx, "c1ccncc1C(=O)O"; return_mappings=true)
+# ------------------------------------------------------------
+# 2) Save / reload (recommended)
+# ------------------------------------------------------------
+save_index(idx, "my_collection.idx")              # saved under ~/.chemgraphsearch/ unless absolute path
+idx = load_index("my_collection.idx")             # reload fast
+
+# ------------------------------------------------------------
+# 3) Search (two matching modes)
+# ------------------------------------------------------------
+
+# EXACT (default-like): strict element matching
+hits = search(idx, "c1ccccc1"; mode=ChemGraphSearch.EXACT, verbose=false)
+
+# GENERALIZED: scaffold-like (aromatic query C can match aromatic C or N)
+hits = search(idx, "c1ccccc1"; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+
+# ------------------------------------------------------------
+# 4) Search + atom mappings (query atom → target atom index)
+# ------------------------------------------------------------
+hits_map = search(idx, "c1ccncc1C(=O)O";
+                  mode=ChemGraphSearch.EXACT,
+                  return_mappings=true,
+                  verbose=false)
+
+# hits / hits_map are vectors of SearchHit objects.
+# Each hit has: h.id  and (optionally) h.mapping
+for h in hits_map
+    println(h.id, "  mapping=", h.mapping)
+end
 ```
 
 ---
