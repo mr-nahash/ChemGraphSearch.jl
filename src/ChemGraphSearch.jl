@@ -1145,27 +1145,35 @@ function read_smi_file(path::String; verbose::Bool=true)::Tuple{Vector{String}, 
 end
 
 # -----------------------------
-# User-friendly display
+# User-friendly display (REPL / notebooks)
 # -----------------------------
-function Base.show(io::IO, idx::Index)
+
+# Index: short summary
+Base.show(io::IO, ::MIME"text/plain", idx::Index) =
     print(io, "ChemGraphSearch.Index(", length(idx.mols), " molecules)")
-end
 
-function Base.show(io::IO, mol::Molecule)
-    # keep this short; molecules are huge internally
+# Molecule: concise human-readable summary
+Base.show(io::IO, ::MIME"text/plain", mol::Molecule) = begin
     arom = count(a -> a.aromatic, mol.atoms)
-    print(io, "ChemGraphSearch.Molecule(\"", mol.id, "\", ",
-          mol.natoms, " atoms, ", arom, " aromatic)")
+    print(io,
+        "ChemGraphSearch.Molecule(\"",
+        mol.id,
+        "\", ",
+        mol.natoms,
+        " atoms, ",
+        arom,
+        " aromatic)"
+    )
 end
 
-function Base.show(io::IO, h::SearchHit)
+# Search result
+Base.show(io::IO, ::MIME"text/plain", h::SearchHit) = begin
     if h.mapping === nothing
         print(io, "SearchHit(", h.id, ")")
     else
         print(io, "SearchHit(", h.id, ", mapping=", h.mapping, ")")
     end
 end
-
 
 end # module
 
