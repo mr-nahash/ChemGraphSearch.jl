@@ -1,6 +1,6 @@
 module ChemGraphSearch
 
-export Atom, Molecule, Index,
+export Atom, Molecule, Index, MatchMode,
        compile_mol, build_index, search,
        save_index, load_index, read_smi_file
 
@@ -36,6 +36,14 @@ const BOND_DOUBLE   = UInt8(2)
 const BOND_TRIPLE   = UInt8(3)
 const BOND_AROMATIC = UInt8(4)
 
+# Match mode:
+# - EXACT: element-typed substructure (default; benzene won't match pyridine)
+# - GENERALIZED: pharma-friendly scaffold relaxations (benzene can match pyridine)
+@enum MatchMode begin
+    EXACT
+    GENERALIZED
+end
+
 # -----------------------------
 # Structs
 # -----------------------------
@@ -58,7 +66,8 @@ struct Molecule
     valence::Vector{UInt8}
     ringatom::BitVector
     neigh_hash::Vector{UInt32}
-    fp::Vector{UInt64}  # FP_WORDS long
+    fp_exact::Vector{UInt64}  # FP_WORDS long
+    fp_gen::Vector{UInt64}    # FP_WORDS long (generalized)
 end
 
 const Query = Molecule
@@ -341,13 +350,21 @@ function perceive!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}}; 
     for i in 1:n
         # only assign implicit H if not explicitly specified in bracket
         if atoms[i].h_count == 0
-            valences = get(VALENCE_TABLE, atoms[i].z, [0])
-            # aromatic bonds count as 1 for valence here
-            curr_val = 0
-            for (_, btype) in adj[i]
-                curr_val += (btype == BOND_AROMATIC) ? 1 : Int(btype)
+            expected_valence::Int
+            if atoms[i].aromatic && atoms[i].z == UInt8(6)
+                # Aromatic carbon: valence 3 (two ring bonds + one substituent/H)
+                expected_valence = 3
+            elseif atoms[i].aromatic && atoms[i].z == UInt8(7)
+                # Pyridine-like aromatic N: valence 3, no H unless explicitly [nH]
+                expected_valence = 3
+            else
+                valences = get(VALENCE_TABLE, atoms[i].z, [0])
+                expected_valence = minimum(valences)
             end
-            min_h = max(0, minimum(valences) - curr_val)
+
+            curr_val = sum((btype == BOND_AROMATIC) ? 1 : Int(btype) for (_, btype) in adj[i]; init=0)
+            min_h = max(0, expected_valence - curr_val)
+
             atoms[i] = Atom(atoms[i].z, atoms[i].charge, atoms[i].aromatic, UInt8(min_h))
         end
     end
@@ -432,8 +449,17 @@ function hash_path(path)::Int
     return (Int(h % UInt32(FP_BITS)) + 1)
 end
 
+# Mode-dependent atom code for fingerprints
+function fp_atom_code(a::Atom, mode::MatchMode)::Int
+    if mode == GENERALIZED && a.aromatic && (a.z == UInt8(6) || a.z == UInt8(7))
+        # collapse aromatic C/N into a single code so generalized queries don't get pruned
+        return 600 + 1
+    end
+    return Int(a.z) * 100 + (a.aromatic ? 1 : 0)
+end
+
 function dfs_paths(curr::Int, path::Vector{Int}, visited_edges::Vector{Tuple{Int,Int}},
-                   adj, atoms, fp::Vector{UInt64})
+                   adj, atoms, fp::Vector{UInt64}, mode::MatchMode)
     if length(path) > MAX_PATH_LEN
         return
     end
@@ -445,22 +471,22 @@ function dfs_paths(curr::Int, path::Vector{Int}, visited_edges::Vector{Tuple{Int
         end
         new_path = copy(path)
         push!(new_path, Int(btype))
-        push!(new_path, Int(atoms[neigh].z) * 100 + (atoms[neigh].aromatic ? 1 : 0))
+        push!(new_path, fp_atom_code(atoms[neigh], mode))
         new_visited = copy(visited_edges)
         push!(new_visited, edge)
-        dfs_paths(neigh, new_path, new_visited, adj, atoms, fp)
+        dfs_paths(neigh, new_path, new_visited, adj, atoms, fp, mode)
     end
 end
 
-function generate_fp(atoms, adj; verbose::Bool=true)::Vector{UInt64}
+function generate_fp(atoms, adj; verbose::Bool=true, mode::MatchMode=EXACT)::Vector{UInt64}
     if verbose
-        println("Generating fingerprint using path hashing (up to length $MAX_PATH_LEN)")
+        println("Generating fingerprint using path hashing (up to length $MAX_PATH_LEN) [mode=$(mode)]")
     end
     fp = zeros(UInt64, FP_WORDS)
     n = length(atoms)
     for start in 1:n
-        seed = Int(atoms[start].z) * 100 + (atoms[start].aromatic ? 1 : 0)
-        dfs_paths(start, [seed], Tuple{Int,Int}[], adj, atoms, fp)
+        seed = fp_atom_code(atoms[start], mode)
+        dfs_paths(start, [seed], Tuple{Int,Int}[], adj, atoms, fp, mode)
     end
     if verbose
         println("Fingerprint generation complete")
@@ -481,7 +507,6 @@ end
 # Kekulé -> Aromatic normalization (chemical equivalence)
 # -----------------------------
 
-# get bond type between two atoms in adjacency list (pre-CSR)
 function _adj_bond_type(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int)::UInt8
     for (nbr, bt) in adj[a]
         if nbr == b
@@ -491,7 +516,6 @@ function _adj_bond_type(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int)::
     return 0x00
 end
 
-# set bond type in both directions in adjacency list (pre-CSR)
 function _adj_set_bond!(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int, bt::UInt8)
     for k in eachindex(adj[a])
         if adj[a][k][1] == b
@@ -508,13 +532,10 @@ function _adj_set_bond!(adj::Vector{Vector{Tuple{Int,UInt8}}}, a::Int, b::Int, b
     return nothing
 end
 
-# canonicalize a 6-cycle to avoid duplicates (rotation + reversal)
 function _canon6(cyc::NTuple{6,Int})::NTuple{6,Int}
     v = collect(cyc)
-    best = nothing
 
     function rotmin(w)
-        # rotate so smallest element is first; if multiple, take lexicographically smallest
         mins = findall(==(minimum(w)), w)
         candidates = NTuple{6,Int}[]
         for idx in mins
@@ -529,7 +550,6 @@ function _canon6(cyc::NTuple{6,Int})::NTuple{6,Int}
     return min(a, b)
 end
 
-# find 6-cycles by bounded DFS (simple, fast enough for small/medium molecules)
 function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int; verbose::Bool=true)
     if verbose
         println("Finding 6-member cycles for aromatic normalization")
@@ -537,9 +557,7 @@ function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int; verbose::B
     cycles = Set{NTuple{6,Int}}()
 
     function dfs(start::Int, curr::Int, path::Vector{Int})
-        # path includes curr
         if length(path) == 6
-            # close cycle?
             if any(t -> t[1] == start, adj[curr])
                 cyc = (path[1], path[2], path[3], path[4], path[5], path[6])
                 push!(cycles, _canon6(cyc))
@@ -554,7 +572,6 @@ function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int; verbose::B
             if nbr in path
                 continue
             end
-            # prune: keep paths roughly increasing from start to reduce duplicates a bit
             dfs(start, nbr, [path; nbr])
         end
     end
@@ -569,7 +586,6 @@ function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int; verbose::B
     return collect(cycles)
 end
 
-# Return true if the ring bonds alternate single/double around the cycle
 function _is_alternating_1_2(bonds::Vector{UInt8})::Bool
     @assert length(bonds) == 6
     ok12 = true
@@ -602,17 +618,14 @@ function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tupl
     for cyc in cycles
         nodes = collect(cyc)
 
-        # Skip if already aromatic ring (nothing to do)
         if any(i -> atoms[i].aromatic, nodes)
             continue
         end
 
-        # Restrict to common aromatic elements (C, N) to stay safe
         if any(i -> !(atoms[i].z in (UInt8(6), UInt8(7))), nodes)
             continue
         end
 
-        # Collect bond types around the ring
         bonds = UInt8[]
         ok = true
         for i in 1:6
@@ -627,10 +640,8 @@ function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tupl
         end
         ok || continue
 
-        # Must be alternating single/double
         _is_alternating_1_2(bonds) || continue
 
-        # --- apply aromatic normalization ---
         for i in nodes
             atoms[i] = Atom(atoms[i].z, atoms[i].charge, true, atoms[i].h_count)
         end
@@ -690,14 +701,15 @@ function compile_mol(id::String, smiles::String; verbose::Bool=true)::Molecule
     adj_list = [ [d for (d, _) in adj[i]] for i in 1:n ]
     ringatom, edge_ring2 = detect_rings(n, adj_list, edge_indices; verbose=verbose)
     edge_ring = edge_ring2
-    
+
     # Degree / valence
     degree = UInt8[length(adj[i]) for i in 1:n]
     valence = UInt8[
         sum(((b == BOND_AROMATIC) ? 1 : Int(b)) for (_, b) in adj[i]; init=0)
         for i in 1:n
     ]
-    # Neighborhood hash
+
+    # Neighborhood hash (kept for future use; not used in matching right now)
     neigh_hash = zeros(UInt32, n)
     for i in 1:n
         neighs = sort([(atoms[j].z, b, atoms[j].aromatic) for (j, b) in adj[i]])
@@ -712,31 +724,51 @@ function compile_mol(id::String, smiles::String; verbose::Bool=true)::Molecule
         println("Computed degrees, valences, ring flags, and neighbor hashes")
     end
 
-    # Fingerprint
-    fp = generate_fp(atoms, adj; verbose=verbose)
+    # Fingerprints (exact + generalized)
+    fp_exact = generate_fp(atoms, adj; verbose=verbose, mode=EXACT)
+    fp_gen   = generate_fp(atoms, adj; verbose=verbose, mode=GENERALIZED)
 
     if verbose
         println("Molecule compilation complete for '$id'")
     end
     return Molecule(id, n, atoms, edge_src_offsets, edge_dst, edge_btype,
-                    edge_ring, degree, valence, ringatom, neigh_hash, fp)
+                    edge_ring, degree, valence, ringatom, neigh_hash,
+                    fp_exact, fp_gen)
 end
 
 # -----------------------------
 # Matcher (VF2-ish)
 # -----------------------------
+
+# Atom compatibility under a mode (pharma-friendly defaults)
+function atom_ok(q::Atom, t::Atom, mode::MatchMode)::Bool
+    if mode == EXACT
+        return q.z == t.z
+    end
+
+    # GENERALIZED:
+    # - Query aromatic carbon matches aromatic carbon or aromatic nitrogen (benzene ↔ pyridine)
+    if q.aromatic && q.z == UInt8(6)
+        return t.aromatic && (t.z == UInt8(6) || t.z == UInt8(7))
+    end
+
+    # Otherwise conservative: require element equality
+    return q.z == t.z
+end
+
 function compatible(qatom::Atom, tatom::Atom,
                     qdeg::UInt8, tdeg::UInt8,
                     qval::UInt8, tval::UInt8,
                     qring::Bool, tring::Bool,
-                    qhash::UInt32, thash::UInt32)
-    return (qatom.z == tatom.z) &&
+                    qhash::UInt32, thash::UInt32,
+                    mode::MatchMode)::Bool
+
+    return atom_ok(qatom, tatom, mode) &&
            (qatom.charge == tatom.charge) &&
            (qatom.aromatic == tatom.aromatic) &&
            (qdeg <= tdeg) &&
            (qval <= tval) &&
            (!qring || tring)
-           # && (qhash == thash)  # optionally enable for extra pruning
 end
 
 function get_bond_type(mol::Molecule, a1::Int, a2::Int)::UInt8
@@ -851,10 +883,14 @@ function vf2_backtrack!(query::Molecule, target::Molecule,
     return false
 end
 
-function substructure_match(query::Query, target::Molecule; return_mapping::Bool=false, verbose::Bool=true)::Union{Bool, Vector{Int}}
+function substructure_match(query::Query, target::Molecule;
+                            return_mapping::Bool=false,
+                            verbose::Bool=true,
+                            mode::MatchMode=EXACT)::Union{Bool, Vector{Int}}
     if verbose
-        println("Performing substructure matching for query ($(query.natoms) atoms) against target '$(target.id)' ($(target.natoms) atoms)")
+        println("Performing substructure matching [mode=$(mode)] for query ($(query.natoms) atoms) against target '$(target.id)' ($(target.natoms) atoms)")
     end
+
     # Candidate prefilter per query atom
     candidates = [Int[] for _ in 1:query.natoms]
     for q in 1:query.natoms
@@ -863,7 +899,8 @@ function substructure_match(query::Query, target::Molecule; return_mapping::Bool
                           query.degree[q], target.degree[t],
                           query.valence[q], target.valence[t],
                           query.ringatom[q], target.ringatom[t],
-                          query.neigh_hash[q], target.neigh_hash[t])
+                          query.neigh_hash[q], target.neigh_hash[t],
+                          mode)
                 push!(candidates[q], t)
             end
         end
@@ -921,21 +958,27 @@ function build_index(smiles_list::Vector{String}, ids::Vector{String}; verbose::
     return Index(mols)
 end
 
-function search(index::Index, query_smiles::String; return_mappings::Bool=false, verbose::Bool=true)::Vector{Tuple{String, Union{Nothing, Vector{Int}}}}
+function search(index::Index, query_smiles::String;
+                return_mappings::Bool=false,
+                verbose::Bool=true,
+                mode::MatchMode=EXACT)::Vector{Tuple{String, Union{Nothing, Vector{Int}}}}
     if verbose
-        println("Starting search for substructure from SMILES: $query_smiles")
+        println("Starting search for substructure from SMILES: $query_smiles [mode=$(mode)]")
         println("Index contains $(length(index.mols)) molecules")
     end
     query = compile_mol("query", query_smiles; verbose=verbose)
     results = Tuple{String, Union{Nothing, Vector{Int}}}[]
 
-    # FP prefilter
+    # FP prefilter (mode-aware)
     if verbose
         println("Applying fingerprint prefilter...")
     end
+    qfp = (mode == EXACT) ? query.fp_exact : query.fp_gen
+
     candidates = Molecule[]
     for mol in index.mols
-        if fp_subset(query.fp, mol.fp)
+        tfp = (mode == EXACT) ? mol.fp_exact : mol.fp_gen
+        if fp_subset(qfp, tfp)
             push!(candidates, mol)
         end
     end
@@ -943,15 +986,15 @@ function search(index::Index, query_smiles::String; return_mappings::Bool=false,
         println("Fingerprint prefilter reduced to $(length(candidates)) candidates")
     end
 
-    # Verify with exact match
+    # Verify with exact VF2-ish match (mode-aware)
     if verbose
-        println("Verifying candidates with exact substructure matching...")
+        println("Verifying candidates with substructure matching...")
     end
     for (i, mol) in enumerate(candidates)
         if verbose
             println("[$i/$(length(candidates))] Checking '$(mol.id)'...")
         end
-        match = substructure_match(query, mol; return_mapping=return_mappings, verbose=verbose)
+        match = substructure_match(query, mol; return_mapping=return_mappings, verbose=verbose, mode=mode)
         if match !== false
             push!(results, (mol.id, return_mappings ? match : nothing))
             if verbose
@@ -969,14 +1012,12 @@ end
 # Persistence
 # -----------------------------
 
-# Pick a safe default directory for data files
 function default_data_dir()::String
     dir = joinpath(homedir(), ".chemgraphsearch")
     isdir(dir) || mkpath(dir)
     return dir
 end
 
-# If user passes a relative path like "test.idx", write it under default_data_dir()
 function normalize_path(path::AbstractString)::String
     p = String(path)
     return isabspath(p) ? p : joinpath(default_data_dir(), p)
@@ -986,6 +1027,7 @@ function save_index(index::Index, path::AbstractString; verbose::Bool=true)
     p = normalize_path(path)
     if verbose
         println("Saving index to file: $p")
+        println("NOTE: Index format changed (fp_exact/fp_gen). Old saved indexes must be rebuilt.")
     end
     open(p, "w") do io
         serialize(io, index)
@@ -1003,9 +1045,6 @@ function load_index(path::AbstractString; verbose::Bool=true)::Index
     end
     open(p) do io
         return deserialize(io)
-    end
-    if verbose
-        println("Index loaded successfully")
     end
 end
 
@@ -1034,4 +1073,6 @@ function read_smi_file(path::String; verbose::Bool=true)::Tuple{Vector{String}, 
     end
     return ids, smiles
 end
+
 end # module
+
