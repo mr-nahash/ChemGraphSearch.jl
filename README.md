@@ -28,36 +28,95 @@ println("Fingerprint size: ", ChemGraphSearch.FP_BITS)   # should print 2048
 ```
 
 ## Quick Demo – Copy & Paste in < 60 seconds
-
 ```julia
 using ChemGraphSearch
 
-# Tiny built-in example dataset
+# ------------------------------------------------------------
+# 1) Tiny built-in demo dataset
+# ------------------------------------------------------------
 smiles = [
-    "c1ccccc1",           # benzene
-    "CCO",                # ethanol
-    "O=c1ccccc1",         # benzaldehyde
-    "c1ccncc1",           # pyridine
-    "C1CCCCC1"            # cyclohexane
+    "c1ccccc1",            # benzene (aromatic C6)
+    "c1ccncc1",            # pyridine (aromatic C5N)
+    "O=c1ccccc1",          # benzaldehyde (Kekulé/aromatic normalization helps)
+    "C1=CC=CC=C1",         # benzene in Kekulé form (should normalize to aromatic)
+    "C1CCCCC1",            # cyclohexane (non-aromatic ring)
+    "CCO",                 # ethanol
+    "c1ccc(cc1)O",         # phenol
+    "c1ccc2ccccc2c1"       # naphthalene
 ]
-ids = ["benzene", "ethanol", "benzald", "pyridine", "cyclohexane"]
+ids = [
+    "benzene",
+    "pyridine",
+    "benzaldehyde",
+    "benzene_kekule",
+    "cyclohexane",
+    "ethanol",
+    "phenol",
+    "naphthalene"
+]
 
 println("Building small demo index...")
-idx = build_index(smiles, ids)
+idx = build_index(smiles, ids; verbose=false)
+println("Index size: ", length(idx.mols), " molecules")
 
-println("\nSearching for any benzene ring...")
-results = search(idx, "c1ccccc1")
+# Helper to print results nicely
+function show_results(title, results)
+    println("\n" * title)
+    if isempty(results)
+        println("  (no matches)")
+        return
+    end
+    for (name, mapping) in results
+        if mapping === nothing
+            println("  • ", name)
+        else
+            # mapping is query_atom_index -> target_atom_index
+            println("  • ", name, "  | mapping: ", mapping)
+        end
+    end
+end
 
-println("\nFound matches:")
-foreach(r -> println("  • ", r[1]), results)
-# Expected output includes: benzene, benzald, pyridine
-```
+# ------------------------------------------------------------
+# 2) EXACT mode (default): element-typed substructure
+#    - benzene query will NOT match pyridine
+# ------------------------------------------------------------
+q = "c1ccccc1"
+res_exact = search(idx, q; mode=EXACT, verbose=false)
+show_results("EXACT search for $q (benzene motif; C must stay C):", res_exact)
 
-Save for next time (much faster):
+# Expected matches: benzene, benzaldehyde, benzene_kekule, phenol, naphthalene
+# NOT expected: pyridine (because one ring atom is N)
 
-```julia
-save_index(idx, "demo_index.idx")
-idx = load_index("demo_index.idx")   # ← reload in < 1 second
+# ------------------------------------------------------------
+# 3) GENERALIZED mode: pharma-friendly aromatic C -> {aromatic C, aromatic N}
+#    - benzene query CAN match pyridine (scaffold-like)
+# ------------------------------------------------------------
+res_gen = search(idx, q; mode=GENERALIZED, verbose=false)
+show_results("GENERALIZED search for $q (aromatic ring scaffold; C can match aromatic N):", res_gen)
+
+# Expected matches include everything from EXACT plus: pyridine
+
+# ------------------------------------------------------------
+# 4) OPTIONAL: show atom mapping (useful for debugging / highlighting)
+# ------------------------------------------------------------
+res_map = search(idx, q; mode=GENERALIZED, return_mappings=true, verbose=false)
+show_results("GENERALIZED + return_mappings=true (see how query atoms map onto target atoms):", res_map)
+
+# ------------------------------------------------------------
+# 5) Save / load index (fast reload)
+# ------------------------------------------------------------
+println("\nSaving index to disk...")
+save_path = save_index(idx, "demo_index.idx"; verbose=true)
+
+println("Reloading index...")
+idx2 = load_index("demo_index.idx"; verbose=false)
+println("Reloaded index size: ", length(idx2.mols))
+
+# Sanity check after reload
+res2 = search(idx2, q; mode=GENERALIZED, verbose=false)
+show_results("GENERALIZED search after reload:", res2)
+
+println("\nDone.")
 ```
 
 ## Ready-to-Run Examples
