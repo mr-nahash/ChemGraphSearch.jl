@@ -1,16 +1,3 @@
-Below is an **enhanced, clearer, newcomer-friendly version** of your README section.
-I’ve kept your technical accuracy intact, but improved:
-
-* **Narrative flow**
-* **First-time reader friendliness**
-* **Clear mental model (what / why / when)**
-* **Reduced intimidation**
-* **More explicit pharma relevance**
-
-You can copy-paste this directly over your current README.
-
----
-
 # ChemGraphSearch.jl
 
 **Pure Julia · Lightweight chemical substructure search engine**
