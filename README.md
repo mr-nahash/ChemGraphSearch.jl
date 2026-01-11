@@ -53,19 +53,6 @@ Pkg.add(url="https://github.com/mr-nahash/ChemGraphSearch.jl.git")
 using ChemGraphSearch
 ```
 
-### Quick smoke test
-
-```julia
-using ChemGraphSearch
-println("Fingerprint size: ", ChemGraphSearch.FP_BITS)
-```
-
-Expected output:
-
-```
-Fingerprint size: 2048
-```
-
 ---
 
 ## Quick Demo – Copy & Paste (< 60 seconds)
@@ -212,13 +199,6 @@ end
 
 ---
 
-## Testing
-
-```bash
-julia --project=test -e 'using Pkg; Pkg.test("ChemGraphSearch")'
-```
-
----
 
 ## Realistic Expectations (January 2026)
 
