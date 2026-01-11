@@ -1,6 +1,6 @@
 name = "ChemGraphSearch"
 uuid = "c6b8e7b2-8f3a-4d63-b8e4-7c2a6a8f9e21"
-version = "0.1.6"
+version = "0.1.7"
 
 [deps]
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"

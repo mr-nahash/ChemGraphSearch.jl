@@ -1,8 +1,9 @@
 module ChemGraphSearch
 
-export Atom, Molecule, Index, MatchMode,
+export Atom, Molecule, Index, MatchMode, SearchHit,
        compile_mol, build_index, search,
-       save_index, load_index, read_smi_file
+       save_index, load_index, read_smi_file,
+       hit_ids, show_hits
 
 using Serialization
 
@@ -74,6 +75,36 @@ const Query = Molecule
 
 struct Index
     mols::Vector{Molecule}
+end
+
+"""
+A single search match.
+
+- `id` is the target molecule id.
+- `mapping` is either `nothing` or a vector mapping query atom index -> target atom index.
+"""
+struct SearchHit
+    id::String
+    mapping::Union{Nothing, Vector{Int}}
+end
+
+"Return just the molecule ids from a vector of hits."
+hit_ids(hits::Vector{SearchHit}) = [h.id for h in hits]
+
+"""
+Pretty-print search results in a user-friendly way.
+"""
+function show_hits(hits::Vector{SearchHit}; title::AbstractString="Matches")
+    println(title, " (", length(hits), "):")
+    isempty(hits) && return println("  (no matches)")
+    for h in hits
+        if h.mapping === nothing
+            println("  • ", h.id)
+        else
+            println("  • ", h.id, " | mapping = ", h.mapping)
+        end
+    end
+    return nothing
 end
 
 # -----------------------------
@@ -939,80 +970,100 @@ end
 # -----------------------------
 # Index + Search
 # -----------------------------
-function build_index(smiles_list::Vector{String}, ids::Vector{String}; verbose::Bool=true)::Index
-    if verbose
-        println("Building index from $(length(smiles_list)) SMILES strings")
-    end
+function build_index(smiles_list::Vector{String}, ids::Vector{String}; verbose::Bool=true, explain::Bool=false)::Index
+    n = length(smiles_list)
+    explain && println("ChemGraphSearch.build_index: compiling $n molecules")
+
     mols = Molecule[]
+    failed = 0
+
     for (i, (sm, id)) in enumerate(zip(smiles_list, ids))
-        if verbose
-            println("[$i/$(length(smiles_list))] Compiling molecule '$id': $sm")
+        if explain
+            println("  [$i/$n] $id")
+        elseif verbose
+            println("[$i/$n] Compiling molecule '$id': $sm")
         end
+
         try
             mol = compile_mol(id, sm; verbose=verbose)
             push!(mols, mol)
-            if verbose
-                println("Successfully added '$id' to index")
-            end
         catch e
+            failed += 1
             @warn "Failed to compile $id: $e"
         end
     end
-    if verbose
+
+    if explain
+        println("  ok:     ", length(mols))
+        println("  failed: ", failed)
+    elseif verbose
         println("Index built with $(length(mols)) molecules")
     end
+
     return Index(mols)
 end
 
 function search(index::Index, query_smiles::String;
                 return_mappings::Bool=false,
                 verbose::Bool=true,
-                mode::MatchMode=EXACT)::Vector{Tuple{String, Union{Nothing, Vector{Int}}}}
-    if verbose
+                mode::MatchMode=EXACT,
+                explain::Bool=false)::Vector{SearchHit}
+
+    # explain = "structured transparency" without noisy internals
+    if explain
+        println("ChemGraphSearch.search")
+        println("  query:  ", query_smiles)
+        println("  mode:   ", mode)
+        println("  index:  ", length(index.mols), " molecules")
+        println("  maps?:  ", return_mappings)
+    elseif verbose
         println("Starting search for substructure from SMILES: $query_smiles [mode=$(mode)]")
         println("Index contains $(length(index.mols)) molecules")
     end
+
     query = compile_mol("query", query_smiles; verbose=verbose)
-    results = Tuple{String, Union{Nothing, Vector{Int}}}[]
 
     # FP prefilter (mode-aware)
-    if verbose
-        println("Applying fingerprint prefilter...")
-    end
     qfp = (mode == EXACT) ? query.fp_exact : query.fp_gen
 
-    candidates = Molecule[]
+    fp_pass = Molecule[]
     for mol in index.mols
         tfp = (mode == EXACT) ? mol.fp_exact : mol.fp_gen
         if fp_subset(qfp, tfp)
-            push!(candidates, mol)
+            push!(fp_pass, mol)
         end
-    end
-    if verbose
-        println("Fingerprint prefilter reduced to $(length(candidates)) candidates")
     end
 
-    # Verify with exact VF2-ish match (mode-aware)
-    if verbose
-        println("Verifying candidates with substructure matching...")
+    if explain
+        println("  fp_pass: ", length(fp_pass), " candidates after fingerprint filter")
+    elseif verbose
+        println("Fingerprint prefilter reduced to $(length(fp_pass)) candidates")
     end
-    for (i, mol) in enumerate(candidates)
-        if verbose
-            println("[$i/$(length(candidates))] Checking '$(mol.id)'...")
+
+    # Verify with substructure matching
+    hits = SearchHit[]
+    checked = 0
+    for mol in fp_pass
+        checked += 1
+        m = substructure_match(query, mol;
+                               return_mapping=return_mappings,
+                               verbose=verbose,
+                               mode=mode)
+        if m !== false
+            push!(hits, SearchHit(mol.id, return_mappings ? m : nothing))
         end
-        match = substructure_match(query, mol; return_mapping=return_mappings, verbose=verbose, mode=mode)
-        if match !== false
-            push!(results, (mol.id, return_mappings ? match : nothing))
-            if verbose
-                println("Match found for '$(mol.id)'")
-            end
-        end
     end
-    if verbose
-        println("Search complete: $(length(results)) matches found")
+
+    if explain
+        println("  verified: ", checked, " checked")
+        println("  hits:     ", length(hits))
+    elseif verbose
+        println("Search complete: $(length(hits)) matches found")
     end
-    return results
+
+    return hits
 end
+
 
 # -----------------------------
 # Persistence
@@ -1031,29 +1082,42 @@ end
 
 function save_index(index::Index, path::AbstractString; verbose::Bool=true)
     p = normalize_path(path)
+
+    # Keep output short & useful
     if verbose
-        println("Saving index to file: $p")
-        println("NOTE: Index format changed (fp_exact/fp_gen). Old saved indexes must be rebuilt.")
+        println("ChemGraphSearch.save_index")
+        println("  file:   ", p)
+        println("  mols:   ", length(index.mols))
+        println("  note:   index includes fp_exact + fp_gen (rebuild older saved indexes)")
     end
+
     open(p, "w") do io
         serialize(io, index)
     end
-    if verbose
-        println("Index saved successfully")
-    end
+
+    verbose && println("  status: OK")
     return p
 end
 
 function load_index(path::AbstractString; verbose::Bool=true)::Index
     p = normalize_path(path)
-    if verbose
-        println("Loading index from file: $p")
-    end
-    open(p) do io
-        return deserialize(io)
-    end
-end
 
+    if verbose
+        println("ChemGraphSearch.load_index")
+        println("  file:   ", p)
+    end
+
+    idx = open(p) do io
+        deserialize(io)
+    end
+
+    if verbose
+        println("  mols:   ", length(idx.mols))
+        println("  status: OK")
+    end
+
+    return idx
+end
 # -----------------------------
 # Utility: read SMILES file
 # -----------------------------
@@ -1079,6 +1143,29 @@ function read_smi_file(path::String; verbose::Bool=true)::Tuple{Vector{String}, 
     end
     return ids, smiles
 end
+
+# -----------------------------
+# User-friendly display
+# -----------------------------
+function Base.show(io::IO, idx::Index)
+    print(io, "ChemGraphSearch.Index(", length(idx.mols), " molecules)")
+end
+
+function Base.show(io::IO, mol::Molecule)
+    # keep this short; molecules are huge internally
+    arom = count(a -> a.aromatic, mol.atoms)
+    print(io, "ChemGraphSearch.Molecule(\"", mol.id, "\", ",
+          mol.natoms, " atoms, ", arom, " aromatic)")
+end
+
+function Base.show(io::IO, h::SearchHit)
+    if h.mapping === nothing
+        print(io, "SearchHit(", h.id, ")")
+    else
+        print(io, "SearchHit(", h.id, ", mapping=", h.mapping, ")")
+    end
+end
+
 
 end # module
 
