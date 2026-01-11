@@ -112,18 +112,48 @@ ids = [
 
 println("Building demo index...")
 idx = build_index(smiles, ids; verbose=false)
-println("Index contains ", length(idx.mols), " molecules")
+println("Index contains ", length(idx.mols), " molecules\n")
 
 # ------------------------------------------------------------
-# Helper: pretty printing
+# Helper: normalize results (SearchHit OR tuple) into (id, mapping)
 # ------------------------------------------------------------
-function show_results(title, results)
-    println("\n" * title)
-    isempty(results) && return println("  (no matches)")
-    for (name, mapping) in results
-        println(mapping === nothing ? "  • $name" :
-                "  • $name | mapping = $mapping")
+function _hit_id_mapping(hit)
+    # New API: SearchHit(id=..., mapping=...)
+    if hasproperty(hit, :id)
+        id = getproperty(hit, :id)
+        mapping = hasproperty(hit, :mapping) ? getproperty(hit, :mapping) : nothing
+        return id, mapping
     end
+
+    # Old API: (id, mapping)
+    if hit isa Tuple && length(hit) == 2
+        return hit[1], hit[2]
+    end
+
+    # Fallback
+    return string(hit), nothing
+end
+
+function hit_ids(results)
+    [first(_hit_id_mapping(h)) for h in results]
+end
+
+function show_results(title, results; show_mapping=false)
+    println(title)
+    if isempty(results)
+        println("  (no matches)\n")
+        return
+    end
+
+    for h in results
+        id, mapping = _hit_id_mapping(h)
+        if show_mapping && mapping !== nothing
+            println("  • ", id, "  | mapping = ", mapping)
+        else
+            println("  • ", id)
+        end
+    end
+    println()
 end
 
 # ------------------------------------------------------------
@@ -135,25 +165,30 @@ query = "c1ccccc1"
 # 3) EXACT mode (strict chemistry)
 #    Aromatic carbon must stay carbon
 # ------------------------------------------------------------
-res_exact = search(idx, query; mode=EXACT, verbose=false)
-show_results("EXACT search (strict element matching):", res_exact)
+res_exact = search(idx, query; mode=ChemGraphSearch.EXACT, verbose=false)
+show_results("EXACT mode (strict element matching):", res_exact)
 
 # ------------------------------------------------------------
 # 4) GENERALIZED mode (pharma-friendly)
-#    Aromatic C can match aromatic C or N
+#    Aromatic C can match aromatic C or aromatic N
 # ------------------------------------------------------------
-res_gen = search(idx, query; mode=GENERALIZED, verbose=false)
-show_results("GENERALIZED search (scaffold-like matching):", res_gen)
+res_gen = search(idx, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+show_results("GENERALIZED mode (scaffold-like matching):", res_gen)
+
+extra = setdiff(hit_ids(res_gen), hit_ids(res_exact))
+println("New hits in GENERALIZED: ",
+        isempty(extra) ? "(none)" : join(extra, ", "))
+println()
 
 # ------------------------------------------------------------
 # 5) Atom mappings (optional)
 # ------------------------------------------------------------
 res_map = search(idx, query;
-                 mode=GENERALIZED,
-                 return_mappings=true,
-                 verbose=false)
-
-show_results("GENERALIZED search with atom mappings:", res_map)
+    mode=ChemGraphSearch.GENERALIZED,
+    return_mappings=true,
+    verbose=false
+)
+show_results("GENERALIZED + atom mappings:", res_map; show_mapping=true)
 
 # ------------------------------------------------------------
 # 6) Save & reload index
@@ -161,12 +196,10 @@ show_results("GENERALIZED search with atom mappings:", res_map)
 save_index(idx, "demo_index.idx")
 idx2 = load_index("demo_index.idx")
 
-res2 = search(idx2, query; mode=GENERALIZED, verbose=false)
-show_results("GENERALIZED search after reload:", res2)
+res_reload = search(idx2, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+show_results("GENERALIZED after reload:", res_reload)
 
-println("\nDone.")
-```
-
+println("Done.")
 ---
 
 ## EXACT vs GENERALIZED — Why it Matters
