@@ -43,7 +43,7 @@ smiles = [
 ids = ["benzene", "ethanol", "benzald", "pyridine", "cyclohexane"]
 
 println("Building small demo index...")
-idx = build_index(smiles, ids; verbose = true)
+idx = build_index(smiles, ids)
 
 println("\nSearching for any benzene ring...")
 results = search(idx, "c1ccccc1")
