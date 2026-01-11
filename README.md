@@ -56,7 +56,7 @@ ids = [
 ]
 
 println("Building small demo index...")
-idx = build_index(smiles, ids; verbose=false)
+idx = build_index(smiles, ids)
 println("Index size: ", length(idx.mols), " molecules")
 
 # Helper to print results nicely
