@@ -66,6 +66,14 @@ Pkg.add(url="https://github.com/yourusername/ChemGraphSearch.jl.git")
 - No binary dependencies
 - RAM: ~1–4 GB per 100k average-sized organic molecules (rough estimate)
 
+## Examples & Demos
+
+You can run the included examples directly:
+```bash
+# From inside the examples/ folder
+julia --project=../.. 01_basic_search.jl
+```
+
 ## Main API Overview
 
 | Function                          | Purpose                                          | Performance note                     | Returns                             |
