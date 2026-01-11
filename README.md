@@ -229,11 +229,3 @@ Use freely in academic, personal and commercial projects.
 **Questions / ideas / horror SMILES?**  
 Open an issue — we love tricky molecules! 🧪
 ```
-
-This version tries to balance three goals:
-
-1. Quick-start remains very easy for newcomers
-2. Detailed technical documentation for people who want to understand/modify/extend the code
-3. Honest communication of current limitations (very important for credibility in cheminformatics)
-
-Feel free to adjust the level of optimism/pessimism and the timeline according to your actual plans. 😄
