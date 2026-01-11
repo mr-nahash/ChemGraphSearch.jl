@@ -30,6 +30,11 @@ It is especially useful for:
 2. It computes a 2048-bit fingerprint to quickly reject most molecules.
 3. It runs a VF2-style exact subgraph match only on the remaining candidates.
 4. Optionally, it returns an atom mapping (query atom → target atom indices).
+<div align="center">
+  <img width="400" height="500"
+       alt="ChemSearchDiagram"
+       src="https://github.com/user-attachments/assets/9fc981cf-f79c-4ca8-aaa7-c30897ca072f" />
+</div>
 
 ## Current Status (January 2026)
 
