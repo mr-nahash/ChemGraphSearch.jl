@@ -1,16 +1,5 @@
 # ChemGraphSearch.jl
-
-**Pure Julia · Lightweight chemical substructure search engine**
-*Designed for small-to-medium molecular libraries (≈ up to 100k–300k compounds)*
-
-ChemGraphSearch.jl is a **Julia-native cheminformatics engine** for **substructure search on molecular graphs**.
-
-It combines:
-
-* **Path-based fingerprints (2048 bits)** for fast candidate pruning
-* **VF2-style subgraph isomorphism** for exact chemical matching
-* **Automatic Kekulé ↔ aromatic normalization**
-* **Pharma-friendly “generalized” matching modes**
+ChemGraphSearch.jl is a small, pure-Julia substructure search engine for SMILES-based molecule libraries. It builds a local index using fast path-based fingerprints to prune candidates, then verifies matches with a VF2-style subgraph isomorphism search (with optional atom mappings). It also includes automatic Kekulé ↔ aromatic normalization so equivalent representations match reliably. The project is intentionally lightweight and hackable—ideal for teaching, prototyping, and Julia-native workflows on small-to-medium collections.
 
 No external dependencies · MIT licensed · Fully hackable Julia codebase
 
@@ -35,6 +24,12 @@ It is especially useful for:
 * Algorithm development & experimentation
 
 ---
+## What happens when you search?
+
+1. ChemGraphSearch compiles each SMILES into a graph (atoms/bonds).
+2. It computes a 2048-bit fingerprint to quickly reject most molecules.
+3. It runs a VF2-style exact subgraph match only on the remaining candidates.
+4. Optionally, it returns an atom mapping (query atom → target atom indices).
 
 ## Current Status (January 2026)
 
@@ -85,160 +80,48 @@ This demo shows:
 ```julia
 using ChemGraphSearch
 
-# ------------------------------------------------------------
-# 1) Small demo dataset
-# ------------------------------------------------------------
 smiles = [
-    "c1ccccc1",            # benzene
-    "c1ccncc1",            # pyridine (one N in aromatic ring)
-    "O=c1ccccc1",          # benzaldehyde
-    "C1=CC=CC=C1",         # benzene (Kekulé form)
-    "C1CCCCC1",            # cyclohexane (non-aromatic)
-    "CCO",                 # ethanol
-    "c1ccc(cc1)O",         # phenol
-    "c1ccc2ccccc2c1"       # naphthalene
+    "c1ccccc1", "c1ccncc1", "O=c1ccccc1", "C1=CC=CC=C1",
+    "C1CCCCC1", "CCO", "c1ccc(cc1)O", "c1ccc2ccccc2c1"
 ]
+ids = ["benzene","pyridine","benzaldehyde","benzene_kekule","cyclohexane","ethanol","phenol","naphthalene"]
 
-ids = [
-    "benzene",
-    "pyridine",
-    "benzaldehyde",
-    "benzene_kekule",
-    "cyclohexane",
-    "ethanol",
-    "phenol",
-    "naphthalene"
-]
-
-println("Building demo index...")
+println("Building index (once)...")
 idx = build_index(smiles, ids; verbose=false)
-println("Index contains ", length(idx.mols), " molecules\n")
+println("✓ indexed ", length(idx.mols), " molecules\n")
 
-# ------------------------------------------------------------
-# Helper: normalize results (SearchHit OR tuple) into (id, mapping)
-# ------------------------------------------------------------
-function _hit_id_mapping(hit)
-    # New API: SearchHit(id=..., mapping=...)
-    if hasproperty(hit, :id)
-        id = getproperty(hit, :id)
-        mapping = hasproperty(hit, :mapping) ? getproperty(hit, :mapping) : nothing
-        return id, mapping
-    end
+query = "c1ccccc1"
+println("Query = ", query, "\n")
 
-    # Old API: (id, mapping)
-    if hit isa Tuple && length(hit) == 2
-        return hit[1], hit[2]
-    end
-
-    # Fallback
-    return string(hit), nothing
-end
-
-function hit_ids(results)
-    [first(_hit_id_mapping(h)) for h in results]
-end
-
-function show_results(title, results; show_mapping=false)
+function show_hits(title, hits; mappings=false)
     println(title)
-    if isempty(results)
-        println("  (no matches)\n")
-        return
-    end
-
-    for h in results
-        id, mapping = _hit_id_mapping(h)
-        if show_mapping && mapping !== nothing
-            println("  • ", id, "  | mapping = ", mapping)
+    isempty(hits) && return println("  (no matches)\n")
+    for h in hits
+        if mappings && hasproperty(h, :mapping) && h.mapping !== nothing
+            println("  • ", h.id, " | mapping = ", h.mapping)
         else
-            println("  • ", id)
+            println("  • ", h.id)
         end
     end
     println()
 end
 
-# ------------------------------------------------------------
-# 2) Query: benzene ring
-# ------------------------------------------------------------
-query = "c1ccccc1"
+hits_exact = search(idx, query; mode=ChemGraphSearch.EXACT, verbose=false)
+show_hits("EXACT (strict element matching):", hits_exact)
 
-# ------------------------------------------------------------
-# 3) EXACT mode (strict chemistry)
-#    Aromatic carbon must stay carbon
-# ------------------------------------------------------------
-res_exact = search(idx, query; mode=ChemGraphSearch.EXACT, verbose=false)
-show_results("EXACT mode (strict element matching):", res_exact)
+hits_gen = search(idx, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+show_hits("GENERALIZED (aromatic C can match aromatic N):", hits_gen)
 
-# ------------------------------------------------------------
-# 4) GENERALIZED mode (pharma-friendly)
-#    Aromatic C can match aromatic C or aromatic N
-# ------------------------------------------------------------
-res_gen = search(idx, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
-show_results("GENERALIZED mode (scaffold-like matching):", res_gen)
+hits_map = search(idx, query; mode=ChemGraphSearch.GENERALIZED, return_mappings=true, verbose=false)
+show_hits("GENERALIZED + atom mappings:", hits_map; mappings=true)
 
-extra = setdiff(hit_ids(res_gen), hit_ids(res_exact))
-println("New hits in GENERALIZED: ",
-        isempty(extra) ? "(none)" : join(extra, ", "))
-println()
-
-# ------------------------------------------------------------
-# 5) Atom mappings (optional)
-# ------------------------------------------------------------
-res_map = search(idx, query;
-    mode=ChemGraphSearch.GENERALIZED,
-    return_mappings=true,
-    verbose=false
-)
-show_results("GENERALIZED + atom mappings:", res_map; show_mapping=true)
-
-# ------------------------------------------------------------
-# 6) Save & reload index
-# ------------------------------------------------------------
 save_index(idx, "demo_index.idx")
 idx2 = load_index("demo_index.idx")
-
-res_reload = search(idx2, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
-show_results("GENERALIZED after reload:", res_reload)
+hits_reload = search(idx2, query; mode=ChemGraphSearch.GENERALIZED, verbose=false)
+show_hits("After reload (GENERALIZED):", hits_reload)
 
 println("Done.")
----
-
-## EXACT vs GENERALIZED — Why it Matters
-
-| Mode            | Meaning                              | Typical Use                                     |
-| --------------- | ------------------------------------ | ----------------------------------------------- |
-| **EXACT**       | Element-strict substructure matching | Patents, filtering, formal substructure queries |
-| **GENERALIZED** | Pharma-style scaffold matching       | Hit expansion, SAR, scaffold hopping            |
-
-Example:
-
-* Benzene **does not** match pyridine in EXACT mode
-* Benzene **does** match pyridine in GENERALIZED mode
-
-This mirrors how medicinal chemists actually reason about scaffolds.
-
----
-
-## Ready-to-Run Examples
-
-All examples live in `examples/`:
-
-```bash
-cd examples
-julia --project=../.. 01_basic_search.jl
 ```
-
-| File                       | What it demonstrates                       | Best for                  |
-| -------------------------- | ------------------------------------------ | ------------------------- |
-| `01_basic_search.jl`       | Simple substructure queries                | First steps               |
-| `02_mappings.jl`           | Atom-to-atom mapping                       | Visualization & SAR       |
-| `03_realistic_workflow.jl` | Read `.smi` → index → save → load → search | Real-world usage          |
-| `04_kekule_aromatic.jl`    | Kekulé ↔ aromatic normalization            | Understanding equivalence |
-| `05_read_smi_file.jl`      | Loading ChEMBL-style `.smi` files          | Your own datasets         |
-
-Each example is **self-contained** and uses the correct project environment.
-
----
-
 ## Core Usage (Cheat Sheet)
 
 ```julia
