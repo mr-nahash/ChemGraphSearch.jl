@@ -4,12 +4,6 @@ export Atom, Molecule, Index,
        compile_mol, build_index, search,
        save_index, load_index, read_smi_file
 
-
-# (paste almost all your code here)
-
-# IMPORTANT: remove `using Test` from the module file.
-# IMPORTANT: do NOT keep the CLI `if abspath(PROGRAM_FILE) == @__FILE__` inside the module.
-
 using Serialization
 
 # -----------------------------
@@ -100,7 +94,10 @@ mutable struct ParserState
                                 Dict{Int,Int}(), Int[], 0, BOND_SINGLE)
 end
 
-function parse_smiles(smiles::String)::Tuple{Vector{Atom}, Vector{Vector{Tuple{Int, UInt8}}}}
+function parse_smiles(smiles::String; verbose::Bool=true)::Tuple{Vector{Atom}, Vector{Vector{Tuple{Int, UInt8}}}}
+    if verbose
+        println("Starting SMILES parsing for: $smiles")
+    end
     state = ParserState(smiles)
     while state.pos <= lastindex(state.s)
         parse_atom_or_branch_or_ring!(state)
@@ -110,6 +107,9 @@ function parse_smiles(smiles::String)::Tuple{Vector{Atom}, Vector{Vector{Tuple{I
     end
     if !isempty(state.ring_map)
         error("Unclosed rings: $(collect(keys(state.ring_map)))")
+    end
+    if verbose
+        println("SMILES parsing completed: $(length(state.atoms)) atoms found")
     end
     return state.atoms, state.adj
 end
@@ -313,7 +313,10 @@ end
 # -----------------------------
 # Perception
 # -----------------------------
-function aromatize_bonds!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}})
+function aromatize_bonds!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}}; verbose::Bool=true)
+    if verbose
+        println("Aromatizing bonds for aromatic atoms")
+    end
     n = length(atoms)
     for i in 1:n
         for k in eachindex(adj[i])
@@ -328,9 +331,12 @@ function aromatize_bonds!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UIn
     end
 end
 
-function perceive!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}})
-    aromatize_bonds!(atoms, adj)
+function perceive!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int, UInt8}}}; verbose::Bool=true)
+    aromatize_bonds!(atoms, adj; verbose=verbose)
 
+    if verbose
+        println("Perceiving implicit hydrogens based on valence")
+    end
     n = length(atoms)
     for i in 1:n
         # only assign implicit H if not explicitly specified in bracket
@@ -353,7 +359,10 @@ end
 # -----------------------------
 sort_tuple(t::Tuple{Int,Int}) = (t[1] < t[2]) ? t : (t[2], t[1])
 
-function detect_rings(n::Int, adj::Vector{Vector{Int}}, edge_indices::Vector{Tuple{Int,Int}})
+function detect_rings(n::Int, adj::Vector{Vector{Int}}, edge_indices::Vector{Tuple{Int,Int}}; verbose::Bool=true)
+    if verbose
+        println("Detecting rings using DFS")
+    end
     ringatom = falses(n)
     edge_ring = falses(length(edge_indices))
     visited = falses(n)
@@ -362,6 +371,9 @@ function detect_rings(n::Int, adj::Vector{Vector{Int}}, edge_indices::Vector{Tup
         if !visited[start]
             dfs_ring!(start, visited, parent, ringatom, edge_ring, adj, edge_indices)
         end
+    end
+    if verbose
+        println("Ring detection complete: $(sum(ringatom)) ring atoms, $(sum(edge_ring)) ring edges")
     end
     return ringatom, edge_ring
 end
@@ -440,12 +452,18 @@ function dfs_paths(curr::Int, path::Vector{Int}, visited_edges::Vector{Tuple{Int
     end
 end
 
-function generate_fp(atoms, adj)::Vector{UInt64}
+function generate_fp(atoms, adj; verbose::Bool=true)::Vector{UInt64}
+    if verbose
+        println("Generating fingerprint using path hashing (up to length $MAX_PATH_LEN)")
+    end
     fp = zeros(UInt64, FP_WORDS)
     n = length(atoms)
     for start in 1:n
         seed = Int(atoms[start].z) * 100 + (atoms[start].aromatic ? 1 : 0)
         dfs_paths(start, [seed], Tuple{Int,Int}[], adj, atoms, fp)
+    end
+    if verbose
+        println("Fingerprint generation complete")
     end
     return fp
 end
@@ -512,7 +530,10 @@ function _canon6(cyc::NTuple{6,Int})::NTuple{6,Int}
 end
 
 # find 6-cycles by bounded DFS (simple, fast enough for small/medium molecules)
-function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int)
+function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int; verbose::Bool=true)
+    if verbose
+        println("Finding 6-member cycles for aromatic normalization")
+    end
     cycles = Set{NTuple{6,Int}}()
 
     function dfs(start::Int, curr::Int, path::Vector{Int})
@@ -542,6 +563,9 @@ function _find_6cycles(adj::Vector{Vector{Tuple{Int,UInt8}}}, n::Int)
         dfs(s, s, [s])
     end
 
+    if verbose
+        println("Found $(length(cycles)) unique 6-cycles")
+    end
     return collect(cycles)
 end
 
@@ -568,12 +592,13 @@ Heuristic chemical equivalence:
 
 This makes `C1=CC=CC=C1` behave like `c1ccccc1` for matching/search.
 """
-function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int,UInt8}}})
+function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tuple{Int,UInt8}}}; verbose::Bool=true)
     n = length(atoms)
     n < 6 && return nothing
 
-    cycles = _find_6cycles(adj, n)
+    cycles = _find_6cycles(adj, n; verbose=verbose)
 
+    normalized_count = 0
     for cyc in cycles
         nodes = collect(cyc)
 
@@ -614,18 +639,28 @@ function normalize_kekule_aromatic!(atoms::Vector{Atom}, adj::Vector{Vector{Tupl
             b = nodes[i == 6 ? 1 : i+1]
             _adj_set_bond!(adj, a, b, BOND_AROMATIC)
         end
+        normalized_count += 1
     end
 
+    if verbose
+        println("Normalized $normalized_count Kekulé rings to aromatic")
+    end
     return nothing
 end
 
 # -----------------------------
 # Compile molecule
 # -----------------------------
-function compile_mol(id::String, smiles::String)::Molecule
-    atoms, adj = parse_smiles(smiles)
-    perceive!(atoms, adj)
-    normalize_kekule_aromatic!(atoms, adj)
+function compile_mol(id::String, smiles::String; verbose::Bool=true)::Molecule
+    if verbose
+        println("Compiling molecule '$id' from SMILES: $smiles")
+    end
+    atoms, adj = parse_smiles(smiles; verbose=verbose)
+    if verbose
+        println("Parsed $(length(atoms)) atoms")
+    end
+    perceive!(atoms, adj; verbose=verbose)
+    normalize_kekule_aromatic!(atoms, adj; verbose=verbose)
     n = length(atoms)
 
     # Build CSR-like half-edge storage: store each undirected edge once under min(a,b)
@@ -647,10 +682,13 @@ function compile_mol(id::String, smiles::String)::Molecule
         end
     end
     edge_src_offsets[n+1] = Int32(length(edge_dst) + 1)
+    if verbose
+        println("Built CSR edge storage with $(length(edge_dst)) undirected edges")
+    end
 
     # Rings
     adj_list = [ [d for (d, _) in adj[i]] for i in 1:n ]
-    ringatom, edge_ring2 = detect_rings(n, adj_list, edge_indices)
+    ringatom, edge_ring2 = detect_rings(n, adj_list, edge_indices; verbose=verbose)
     edge_ring = edge_ring2
     
     # Degree / valence
@@ -670,10 +708,16 @@ function compile_mol(id::String, smiles::String)::Molecule
         end
         neigh_hash[i] = h
     end
+    if verbose
+        println("Computed degrees, valences, ring flags, and neighbor hashes")
+    end
 
     # Fingerprint
-    fp = generate_fp(atoms, adj)
+    fp = generate_fp(atoms, adj; verbose=verbose)
 
+    if verbose
+        println("Molecule compilation complete for '$id'")
+    end
     return Molecule(id, n, atoms, edge_src_offsets, edge_dst, edge_btype,
                     edge_ring, degree, valence, ringatom, neigh_hash, fp)
 end
@@ -807,7 +851,10 @@ function vf2_backtrack!(query::Molecule, target::Molecule,
     return false
 end
 
-function substructure_match(query::Query, target::Molecule; return_mapping::Bool=false)::Union{Bool, Vector{Int}}
+function substructure_match(query::Query, target::Molecule; return_mapping::Bool=false, verbose::Bool=true)::Union{Bool, Vector{Int}}
+    if verbose
+        println("Performing substructure matching for query ($(query.natoms) atoms) against target '$(target.id)' ($(target.natoms) atoms)")
+    end
     # Candidate prefilter per query atom
     candidates = [Int[] for _ in 1:query.natoms]
     for q in 1:query.natoms
@@ -821,15 +868,27 @@ function substructure_match(query::Query, target::Molecule; return_mapping::Bool
             end
         end
     end
+    if verbose
+        println("Prefiltered candidates per query atom: $([length(c) for c in candidates])")
+    end
 
     # Order query atoms: smallest candidate set first, then higher degree, then ring atoms
     order = sort(1:query.natoms; by = q -> (length(candidates[q]), -Int(query.degree[q]), query.ringatom[q] ? 0 : 1))
+    if verbose
+        println("Query atom matching order: $order")
+    end
 
     mapping = fill(0, query.natoms)
     used = falses(target.natoms)
 
     if vf2_backtrack!(query, target, order, 1, mapping, used, candidates)
+        if verbose
+            println("Substructure match found")
+        end
         return return_mapping ? mapping : true
+    end
+    if verbose
+        println("No substructure match found")
     end
     return false
 end
@@ -837,37 +896,71 @@ end
 # -----------------------------
 # Index + Search
 # -----------------------------
-function build_index(smiles_list::Vector{String}, ids::Vector{String})::Index
+function build_index(smiles_list::Vector{String}, ids::Vector{String}; verbose::Bool=true)::Index
+    if verbose
+        println("Building index from $(length(smiles_list)) SMILES strings")
+    end
     mols = Molecule[]
-    for (sm, id) in zip(smiles_list, ids)
+    for (i, (sm, id)) in enumerate(zip(smiles_list, ids))
+        if verbose
+            println("[$i/$(length(smiles_list))] Compiling molecule '$id': $sm")
+        end
         try
-            mol = compile_mol(id, sm)
+            mol = compile_mol(id, sm; verbose=verbose)
             push!(mols, mol)
+            if verbose
+                println("Successfully added '$id' to index")
+            end
         catch e
             @warn "Failed to compile $id: $e"
         end
     end
+    if verbose
+        println("Index built with $(length(mols)) molecules")
+    end
     return Index(mols)
 end
 
-function search(index::Index, query_smiles::String; return_mappings::Bool=false)::Vector{Tuple{String, Union{Nothing, Vector{Int}}}}
-    query = compile_mol("query", query_smiles)
+function search(index::Index, query_smiles::String; return_mappings::Bool=false, verbose::Bool=true)::Vector{Tuple{String, Union{Nothing, Vector{Int}}}}
+    if verbose
+        println("Starting search for substructure from SMILES: $query_smiles")
+        println("Index contains $(length(index.mols)) molecules")
+    end
+    query = compile_mol("query", query_smiles; verbose=verbose)
     results = Tuple{String, Union{Nothing, Vector{Int}}}[]
 
     # FP prefilter
+    if verbose
+        println("Applying fingerprint prefilter...")
+    end
     candidates = Molecule[]
     for mol in index.mols
         if fp_subset(query.fp, mol.fp)
             push!(candidates, mol)
         end
     end
+    if verbose
+        println("Fingerprint prefilter reduced to $(length(candidates)) candidates")
+    end
 
     # Verify with exact match
-    for mol in candidates
-        match = substructure_match(query, mol; return_mapping=return_mappings)
+    if verbose
+        println("Verifying candidates with exact substructure matching...")
+    end
+    for (i, mol) in enumerate(candidates)
+        if verbose
+            println("[$i/$(length(candidates))] Checking '$(mol.id)'...")
+        end
+        match = substructure_match(query, mol; return_mapping=return_mappings, verbose=verbose)
         if match !== false
             push!(results, (mol.id, return_mappings ? match : nothing))
+            if verbose
+                println("Match found for '$(mol.id)'")
+            end
         end
+    end
+    if verbose
+        println("Search complete: $(length(results)) matches found")
     end
     return results
 end
@@ -889,25 +982,40 @@ function normalize_path(path::AbstractString)::String
     return isabspath(p) ? p : joinpath(default_data_dir(), p)
 end
 
-function save_index(index::Index, path::AbstractString)
+function save_index(index::Index, path::AbstractString; verbose::Bool=true)
     p = normalize_path(path)
+    if verbose
+        println("Saving index to file: $p")
+    end
     open(p, "w") do io
         serialize(io, index)
+    end
+    if verbose
+        println("Index saved successfully")
     end
     return p
 end
 
-function load_index(path::AbstractString)::Index
+function load_index(path::AbstractString; verbose::Bool=true)::Index
     p = normalize_path(path)
+    if verbose
+        println("Loading index from file: $p")
+    end
     open(p) do io
         return deserialize(io)
+    end
+    if verbose
+        println("Index loaded successfully")
     end
 end
 
 # -----------------------------
 # Utility: read SMILES file
 # -----------------------------
-function read_smi_file(path::String)::Tuple{Vector{String}, Vector{String}}
+function read_smi_file(path::String; verbose::Bool=true)::Tuple{Vector{String}, Vector{String}}
+    if verbose
+        println("Reading SMILES file: $path")
+    end
     ids = String[]
     smiles = String[]
     for line in readlines(path)
@@ -920,6 +1028,9 @@ function read_smi_file(path::String)::Tuple{Vector{String}, Vector{String}}
             push!(ids, parts[1])
             push!(smiles, parts[2])
         end
+    end
+    if verbose
+        println("Read $(length(ids)) molecules from file")
     end
     return ids, smiles
 end
